@@ -92,24 +92,32 @@ end
 
 local type_map = { up="vsplit", down="vsplit", left="hsplit", right="hsplit" }
 
-function Node:split(dir, view, locked)
+-- The "locked" argument below should be in the form {x = <boolean>, y = <boolean>}
+-- and it indicates if the node want to have a fixed size along the axis where the
+-- boolean is true. If not it will be expanded to take all the available space.
+-- The "resizable" flag indicates if, along the "locked" axis the node can be resized
+-- by the user.
+function Node:split(dir, view, locked, resizable)
   assert(self.type == "leaf", "Tried to split non-leaf node")
-  local type = assert(type_map[dir], "Invalid direction")
+  local node_type = assert(type_map[dir], "Invalid direction")
   local last_active = core.active_view
   local child = Node()
   child:consume(self)
-  self:consume(Node(type))
+  self:consume(Node(node_type))
   self.a = child
   self.b = Node()
   if view then self.b:add_view(view) end
   if locked then
+    assert(type(locked) == 'table')
     self.b.locked = locked
+    self.b.resizable = resizable or false
     core.set_active_view(last_active)
   end
   if dir == "up" or dir == "left" then
     self.a, self.b = self.b, self.a
+    return self.a
   end
-  return child
+  return self.b
 end
 
 
@@ -253,20 +261,36 @@ function Node:get_divider_rect()
 end
 
 
+-- Return two values for x and y axis and each of them is either falsy or a number.
+-- A falsy value indicate no fixed size along the corresponding direction.
 function Node:get_locked_size()
   if self.type == "leaf" then
     if self.locked then
       local size = self.active_view.size
-      return size.x, size.y
+      -- The values below should be either a falsy value or a number
+      local sx = (self.locked and self.locked.x) and size.x
+      local sy = (self.locked and self.locked.y) and size.y
+      return sx, sy
     end
   else
     local x1, y1 = self.a:get_locked_size()
     local x2, y2 = self.b:get_locked_size()
-    if x1 and x2 then
-      local dsx = (x1 < 1 or x2 < 1) and 0 or style.divider_size
-      local dsy = (y1 < 1 or y2 < 1) and 0 or style.divider_size
-      return x1 + x2 + dsx, y1 + y2 + dsy
+    -- The values below should be either a falsy value or a number
+    local sx, sy
+    if self.type == 'hsplit' then
+      if x1 and x2 then
+        local dsx = (x1 < 1 or x2 < 1) and 0 or style.divider_size
+        sx = x1 + x2 + dsx
+      end
+      sy = y1 or y2
+    else
+      if y1 and y2 then
+        local dsy = (y1 < 1 or y2 < 1) and 0 or style.divider_size
+        sy = y1 + y2 + dsy
+      end
+      sx = x1 or x2
     end
+    return sx, sy
   end
 end
 
@@ -279,9 +303,9 @@ end
 
 -- calculating the sizes is the same for hsplits and vsplits, except the x/y
 -- axis are swapped; this function lets us use the same code for both
-local function calc_split_sizes(self, x, y, x1, x2)
+local function calc_split_sizes(self, x, y, x1, x2, y1, y2)
   local n
-  local ds = (x1 and x1 < 1 or x2 and x2 < 1) and 0 or style.divider_size
+  local ds = ((x1 and x1 < 1) or (x2 and x2 < 1)) and 0 or style.divider_size
   if x1 then
     n = x1 + ds
   elseif x2 then
@@ -419,6 +443,38 @@ function Node:close_all_docviews()
 end
 
 
+function Node:is_resizable(axis)
+  if self.type == 'leaf' then
+    return not self.locked or not self.locked[axis] or self.resizable
+  else
+    local a_resizable = self.a:is_resizable(axis)
+    local b_resizable = self.b:is_resizable(axis)
+    return a_resizable and b_resizable
+  end
+end
+
+
+function Node:resize(axis, value)
+  if self.type == 'leaf' then
+    -- The logic here is: accept the resize only if locked along the axis
+    -- and is declared "resizable". If it is not locked we don't accept the
+    -- resize operation here because for proportional panes the resize is
+    -- done using the "divider" value of the parent node.
+    if (self.locked and self.locked[axis]) and self.resizable then
+      local view = self.active_view
+      view.size[axis] = value
+      return true
+    end
+  else
+    local a_resizable = self.a:is_resizable(axis)
+    local b_resizable = self.b:is_resizable(axis)
+    if a_resizable and b_resizable then
+      self.a:resize(axis, value)
+      self.b:resize(axis, value)
+    end
+  end
+end
+
 
 local RootView = View:extend()
 
@@ -516,13 +572,23 @@ function RootView:on_mouse_released(...)
 end
 
 
+local function resize_child_node(node, axis, value, delta)
+  local accept_resize = node.a:resize(axis, value) or node.b:resize(axis, node.size[axis] - value)
+  if not accept_resize then
+    node.divider = node.divider + delta / node.size[axis]
+  end
+end
+
+
 function RootView:on_mouse_moved(x, y, dx, dy)
   if self.dragged_divider then
     local node = self.dragged_divider
     if node.type == "hsplit" then
-      node.divider = node.divider + dx / node.size.x
-    else
-      node.divider = node.divider + dy / node.size.y
+      x = common.clamp(x, 0, self.root_node.size.x * 0.95)
+      resize_child_node(node, "x", x, dx)
+    elseif node.type == "vsplit" then
+      y = common.clamp(x, 0, self.root_node.size.y * 0.95)
+      resize_child_node(node, "y", y, dy)
     end
     node.divider = common.clamp(node.divider, 0.01, 0.99)
     return
@@ -534,7 +600,10 @@ function RootView:on_mouse_moved(x, y, dx, dy)
   local node = self.root_node:get_child_overlapping_point(x, y)
   local div = self.root_node:get_divider_overlapping_point(x, y)
   if div then
-    system.set_cursor(div.type == "hsplit" and "sizeh" or "sizev")
+    local axis = (div.type == "hsplit" and "x" or "y")
+    if div.a:is_resizable(axis) and div.b:is_resizable(axis) then
+      system.set_cursor(div.type == "hsplit" and "sizeh" or "sizev")
+    end
   elseif node:get_tab_overlapping_point(x, y) then
     system.set_cursor("arrow")
   else

@@ -2,6 +2,27 @@ Lite XL is following closely [rxi/lite](https://github.com/rxi/lite) but with so
 
 This files document the differences between Lite XL and rxi/lite for each version.
 
+### 1.16
+
+Implement a toolbar shown in the bottom part of the tree-view.
+The toolbar is especially meant for new users to give an easy, visual, access
+to the more important commands.
+
+Make the treeview actually resizable and shows the resize cursor only when panes
+are actually resizable.
+
+Add config mechanism to disable a plugin by setting
+`config.<plugin-name> = false`.
+
+Improve the "detect indent" plugin to take into account the syntax and exclude comments
+for much accurate results.
+
+Add command `root:close-all` to close all the documents currently opened.
+
+Show the full path filename of the active document in the window's title.
+
+Fix problem with user's module reload not always enabled.
+
 ### 1.15
 
 **Project directories**

@@ -1,3 +1,5 @@
+global {VERSION = "1.16.0"}
+
 local config = {}
 
 config.project_scan_rate = 5
@@ -18,6 +20,9 @@ config.tab_type = "soft"
 config.line_limit = 80
 config.max_symbols = 4000
 config.max_project_files = 2000
-config.full_path_in_window_title = false
+
+-- Disable plugin loading setting to false the config entry
+-- of the same name.
+config.trimwhitespace = false
 
 return config

@@ -38,7 +38,7 @@ local function normalize_path(s)
 end
 
 
-local function add_project_to_recents(dir_path_abs)
+local function update_recents_project(action, dir_path_abs)
   local dirname = normalize_path(dir_path_abs)
   if not dirname then return end
   local recents = core.recent_projects
@@ -49,7 +49,9 @@ local function add_project_to_recents(dir_path_abs)
       break
     end
   end
-  table.insert(recents, 1, dirname)
+  if action == "add" then
+    table.insert(recents, 1, dirname)
+  end
 end
 
 
@@ -78,7 +80,7 @@ end
 function core.open_folder_project(dir_path_abs)
   if core.set_project_dir(dir_path_abs, core.on_quit_project) then
     core.root_view:close_all_docviews()
-    add_project_to_recents(dir_path_abs)
+    update_recents_project("add", dir_path_abs)
     core.on_enter_project(dir_path_abs)
   end
 end
@@ -231,7 +233,7 @@ local function create_user_directory()
       error("cannot create directory: \"" .. dirname_create .. "\"")
     end
   end
-  for _, modname in ipairs {'plugins', 'colors'} do
+  for _, modname in ipairs {'plugins', 'colors', 'fonts'} do
     local subdirname = dirname_create .. '/' .. modname
     if not system.mkdir(subdirname) then
       error("cannot create directory: \"" .. subdirname .. "\"")
@@ -253,17 +255,24 @@ local keymap = require "core.keymap"
 local config = require "core.config"
 local style = require "core.style"
 
+------------------------------ Themes ----------------------------------------
+
 -- light theme:
 -- core.reload_module("colors.summer")
+
+--------------------------- Key bindings -------------------------------------
 
 -- key binding:
 -- keymap.add { ["ctrl+escape"] = "core:quit" }
 
+
+------------------------------- Fonts ----------------------------------------
+
 -- customize fonts:
--- style.font = renderer.font.load(DATADIR .. "/fonts/font.ttf", 14 * SCALE)
--- style.code_font = renderer.font.load(DATADIR .. "/fonts/monospace.ttf", 13.5 * SCALE)
+-- style.font = renderer.font.load(DATADIR .. "/fonts/font.ttf", 12 * SCALE)
+-- style.code_font = renderer.font.load(DATADIR .. "/fonts/monospace.ttf", 12 * SCALE)
 --
--- fonts used by the editor:
+-- font names used by lite:
 -- style.font      : user interface
 -- style.big_font  : big text in welcome screen
 -- style.icon_font : icons
@@ -276,6 +285,16 @@ local style = require "core.style"
 -- possible values are:
 -- antialiasing: grayscale, subpixel
 -- hinting: none, slight, full
+
+------------------------------ Plugins ----------------------------------------
+
+-- enable or disable plugin loading setting config entries:
+
+-- enable trimwhitespace, otherwise it is disable by default:
+-- config.trimwhitespace = true
+--
+-- disable detectindent, otherwise it is enabled by default
+-- config.detectindent = false
 ]])
   init_file:close()
 end
@@ -330,7 +349,14 @@ function core.init()
   RootView = require "core.rootview"
   StatusView = require "core.statusview"
   CommandView = require "core.commandview"
+  DocView = require "core.docview"
   Doc = require "core.doc"
+
+  if PATHSEP == '\\' then
+    USERDIR = common.normalize_path(USERDIR)
+    DATADIR = common.normalize_path(DATADIR)
+    EXEDIR  = common.normalize_path(EXEDIR)
+  end
 
   do
     local recent_projects, window_position = load_session()
@@ -341,7 +367,9 @@ function core.init()
   end
 
   local project_dir = core.recent_projects[1] or "."
+  local project_dir_explicit = false
   local files = {}
+  local delayed_error
   for i = 2, #ARGS do
     local arg_filename = strip_trailing_slash(ARGS[i])
     local info = system.get_file_info(arg_filename) or {}
@@ -353,6 +381,9 @@ function core.init()
       end
     elseif info.type == "dir" then
       project_dir = arg_filename
+      project_dir_explicit = true
+    else
+      delayed_error = string.format("error: invalid file or directory %q", ARGS[i])
     end
   end
 
@@ -363,11 +394,15 @@ function core.init()
   core.threads = setmetatable({}, { __mode = "k" })
 
   local project_dir_abs = system.absolute_path(project_dir)
-  local set_project_ok = core.set_project_dir(project_dir_abs)
+  local set_project_ok = project_dir_abs and core.set_project_dir(project_dir_abs)
   if set_project_ok then
-    add_project_to_recents(project_dir_abs)
+    if project_dir_explicit then
+      update_recents_project("add", project_dir_abs)
+    end
   else
-    core.error("Cannot enter project directory %q", project_dir)
+    if not project_dir_explicit then
+      update_recents_project("remove", project_dir)
+    end
     project_dir_abs = system.absolute_path(".")
     if not core.set_project_dir(project_dir_abs) then
       print("internal error: cannot set project directory to cwd")
@@ -383,14 +418,15 @@ function core.init()
   core.command_view = CommandView()
   core.status_view = StatusView()
 
-  core.root_view.root_node.is_primary_node = true
-  core.root_view.root_node:split("down", core.command_view, true)
-  core.root_view.root_node.b:split("down", core.status_view, true)
+  local cur_node = core.root_view.root_node
+  cur_node.is_primary_node = true
+  cur_node = cur_node:split("down", core.command_view, {y = true})
+  cur_node = cur_node:split("down", core.status_view, {y = true})
 
   core.project_scan_thread_id = core.add_thread(project_scan_thread)
   command.add_defaults()
-  local got_plugin_error = not core.load_plugins()
   local got_user_error = not core.load_user_directory()
+  local got_plugin_error = not core.load_plugins()
 
   do
     local pdir, pname = project_dir_abs:match("(.*)[/\\\\](.*)")
@@ -400,6 +436,10 @@ function core.init()
 
   for _, filename in ipairs(files) do
     core.root_view:open_doc(core.open_doc(filename))
+  end
+
+  if delayed_error then
+    core.error(delayed_error)
   end
 
   if got_plugin_error or got_user_error or got_project_error then
@@ -456,6 +496,19 @@ do
   core.on_enter_project = do_nothing
 end
 
+
+core.doc_save_hooks = {}
+function core.add_save_hook(fn)
+  core.doc_save_hooks[#core.doc_save_hooks + 1] = fn
+end
+
+
+function core.on_doc_save(filename)
+  for _, hook in ipairs(core.doc_save_hooks) do
+    hook(filename)
+  end
+end
+
 local function quit_with_function(quit_fn, force)
   if force then
     delete_temp_files()
@@ -484,12 +537,18 @@ function core.load_plugins()
   for _, root_dir in ipairs {DATADIR, USERDIR} do
     local files = system.list_dir(root_dir .. "/plugins")
     for _, filename in ipairs(files or {}) do
-      local modname = "plugins." .. filename:gsub(".lua$", "")
-      local ok = core.try(require, modname)
-      if ok then
-        core.log_quiet("Loaded plugin %q", modname)
-      else
-        no_errors = false
+      local basename = filename:gsub(".lua$", "")
+      if config[basename] ~= false then
+        local modname = "plugins." .. basename
+        local ok = core.try(require, modname)
+        -- Normally a log line is added for each loaded plugin which is a
+        -- good thing. Unfortunately we load the user module before the plugins
+        -- so all the messages here can fill the log screen and hide an evential
+        -- user module's error.
+        -- if ok then core.log_quiet("Loaded plugin %q", modname) end
+        if not ok then
+          no_errors = false
+        end
       end
     end
   end
@@ -684,12 +743,23 @@ function core.on_event(type, ...)
 end
 
 
+local function get_title_filename(view)
+  local doc_filename = view.get_filename and view:get_filename() or view:get_name()
+  return (doc_filename ~= "---") and doc_filename or ""
+end
+
+
+local function compose_window_title(title)
+  return title == "" and "lite" or title .. " - lite"
+end
+
+
 function core.step()
   -- handle events
   local did_keymap = false
   local mouse_moved = false
   local mouse = { x = 0, y = 0, dx = 0, dy = 0 }
-  DocView = require "core.docview"
+  
 
   for type, a,b,c,d in system.poll_event do
     if type == "mousemoved" then
@@ -726,11 +796,10 @@ function core.step()
   end
 
   -- update window title
-  local name = core.active_view:get_name()
-  local title = (name ~= "---") and ( (config.full_path_in_window_title and core.active_view:is(DocView) and core.active_view.doc.filename or name) .. " - lite") or  "lite"
-  if title ~= core.window_title then
-    system.set_window_title(title)
-    core.window_title = title
+  local current_title = get_title_filename(core.active_view)
+  if current_title ~= core.window_title then
+    system.set_window_title(compose_window_title(current_title))
+    core.window_title = current_title
   end
 
   -- draw
@@ -818,6 +887,16 @@ function core.on_error(err)
     end
   end
 end
+
+
+core.add_save_hook(function(filename)
+  local doc = core.active_view.doc
+  if doc and doc:is(Doc) and doc.filename == USERDIR .. PATHSEP .. "init.lua" then
+    core.reload_module("core.style")
+    core.load_user_directory()
+  end
+end)
+
 
 
 return core
