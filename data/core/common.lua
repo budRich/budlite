@@ -227,6 +227,10 @@ function common.home_expand(text)
   return HOME and text:gsub("^~", HOME) or text
 end
 
+function common.starts_with(str, start)
+   return str:sub(1, #start) == start
+end
+
 
 function common.normalize_path(filename)
   if PATHSEP == '\\' then
