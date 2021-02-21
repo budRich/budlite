@@ -888,10 +888,20 @@ function core.on_error(err)
   end
 end
 
+local function is_user_module_file(path)
+  return (path == USERDIR .. PATHSEP .. "init.lua")
+end
+
+local function is_user_color_file(path)
+  local colorspath = USERDIR .. PATHSEP .. "colors"
+  return common.starts_with(path, colorspath)
+end
 
 core.add_save_hook(function(filename)
   local doc = core.active_view.doc
-  if doc and doc:is(Doc) and doc.filename == USERDIR .. PATHSEP .. "init.lua" then
+  if doc and doc:is(Doc) and (is_user_module_file(doc.filename) 
+                          or  is_user_color_file(doc.filename)) 
+  then
     core.reload_module("core.style")
     core.load_user_directory()
   end
